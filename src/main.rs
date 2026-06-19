@@ -11,6 +11,7 @@ use symphonia::default::get_codecs;
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Serialize, Deserialize};
 use std::fs;
+use rand::Rng;
 
 #[derive(Serialize, Deserialize)]
 pub struct AudioData {
@@ -32,6 +33,27 @@ pub struct Frames{
     pub bands: [f32; 32],
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Vec3 {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+struct Particle {
+    pos: Vec3,
+    vel: Vec3,
+}
+
+impl Vec3 {
+    pub fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+
+    pub fn zero() -> Self {
+        Self::new(0.0, 0.0, 0.0)
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache_path = "cache/song.analysis";
@@ -98,7 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let audio_data = AudioData {
             sample_rate,
             channels,
-            samples: samples.iter().map(|s| (*s * f32::MAX as f32) as f32).collect(),
+            samples,
             fps: 24,
             frames,
         };
@@ -106,6 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         save_data(cache_path, &audio_data)?;
         audio_data
     };
+    let particles = gen_particles(10000);
     // println!("{:?}", track.id);
     // println!("{:?}", track.codec_params.codec);
     // println!("{:?}", track.codec_params.sample_rate);
@@ -154,4 +177,20 @@ fn load_data(path: &str,) -> Result<AudioData, Box<dyn std::error::Error>> {
     let bytes = std::fs::read(path)?;
     let (data, _) = bincode::serde::decode_from_slice(&bytes, bincode::config::standard() )?;
     Ok(data)
+}
+
+pub fn gen_particles(count: usize) -> Vec<Particle> {
+    let mut rng = rand::rng();
+    let mut particles = Vec::new();
+    for i in 0..count {
+        particles.push(Particle {
+            pos: Vec3 {
+                x: rng.random_range(-1.0..1.0),
+                y: rng.random_range(-1.0..1.0),
+                z: rng.random_range(-1.0..1.0),
+            },
+            vel: Vec3::zero(),
+        });
+    }
+    particles
 }
