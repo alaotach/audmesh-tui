@@ -45,6 +45,11 @@ struct Particle {
     vel: Vec3,
 }
 
+struct Attractor {
+    pos: Vec3,
+    strength: f32,
+}
+
 impl Vec3 {
     pub fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
@@ -53,10 +58,46 @@ impl Vec3 {
     pub fn zero() -> Self {
         Self::new(0.0, 0.0, 0.0)
     }
+    pub fn add(self, other: Vec3) -> Vec3 {
+        Vec3 {
+            x: self.x + other.x,
+            y: self.y + other.y,
+            z: self.z + other.z,
+        }
+    }
+
+    pub fn sub(self, other: Vec3) -> Vec3 {
+        Vec3 {
+            x: self.x - other.x,
+            y: self.y - other.y,
+            z: self.z - other.z,
+        }
+    }
+
+    pub fn mul(self, num: f32) -> Vec3 {
+        Vec3 {
+            x: self.x * num,
+            y: self.y * num,
+            z: self.z * num,
+        }
+    }
+
+    pub fn length(self) -> f32 {
+        (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
+    }
+
+    pub fn normalize(self) -> Vec3 {
+        let len = self.length();
+        if len == 0.0 {
+            return Vec3::zero();
+        }
+        self.mul(1.0 / len)
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache_path = "cache/song.analysis";
+    
 
     let _audio_data = if Path::new(cache_path).exists() {
         load_data(cache_path)?
@@ -128,7 +169,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         save_data(cache_path, &audio_data)?;
         audio_data
     };
-    let particles = gen_particles(10000);
+    let mut particles = gen_particles(100);
+    let attractor = Attractor {
+        pos: Vec3::zero(),
+        strength: 1.0,
+    };
+    for _ in 0..100 {
+        sim_particle(&mut particles, &attractor);
+    }
     // println!("{:?}", track.id);
     // println!("{:?}", track.codec_params.codec);
     // println!("{:?}", track.codec_params.sample_rate);
@@ -182,7 +230,7 @@ fn load_data(path: &str,) -> Result<AudioData, Box<dyn std::error::Error>> {
 pub fn gen_particles(count: usize) -> Vec<Particle> {
     let mut rng = rand::rng();
     let mut particles = Vec::new();
-    for i in 0..count {
+    for _ in 0..count {
         particles.push(Particle {
             pos: Vec3 {
                 x: rng.random_range(-1.0..1.0),
@@ -193,4 +241,15 @@ pub fn gen_particles(count: usize) -> Vec<Particle> {
         });
     }
     particles
+}
+
+fn sim_particle(p: &mut Vec<Particle>, attractor: &Attractor ) {
+    for i in 0..p.len() {
+        let dir = attractor.pos.sub(p[i].pos);
+        let force =  dir.normalize().mul(0.01 * attractor.strength);
+        p[i].vel =
+            p[i].vel.add(force);
+        p[i].pos =
+            p[i].pos.add(p[i].vel);
+    }
 }
