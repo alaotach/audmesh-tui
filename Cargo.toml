@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 symphonia = { version = "0.5.5", features = ["all"] }
+rustfft = "6"
