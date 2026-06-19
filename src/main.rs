@@ -18,17 +18,14 @@ pub struct AudioData {
 }
 
 pub struct FFTbands{
-    pub bass: f32,
-    pub mid: f32,
-    pub treble: f32,
+    pub bands: [f32; 32],
 }
 
 pub struct Frames{
     pub time: f32,
-    pub bass: f32,
-    pub mid: f32,
-    pub treble: f32,
+    pub bands: [f32; 32],
 }
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = Path::new("assets/audmesh.mp3");
@@ -66,13 +63,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bands = analyze_fft(&samples[pos..pos + size], sample_rate, channels);
         frames.push(Frames { 
             time: pos as f32 / (sample_rate as f32 * channels as f32),
-            bass: bands.bass,
-            mid: bands.mid,
-            treble: bands.treble,
+            bands: bands.bands,
         });
         pos += samples_chunk;
     }
     println!("Frames: {}", frames.len());
+    let mut max_bands = [0.0f32; 32];
+    for f in &frames {
+        for i in 0..32 {
+            max_bands[i] = max_bands[i].max(f.bands[i]);
+        }
+    }
+    for f in &mut frames {
+        for i in 0..32 {
+            if max_bands[i] > 0.0 {
+                f.bands[i] /= max_bands[i];
+            }
+        }
+    }
+    // for i in 0..10 {
+    //     println!("{}", frames[200].bands[i]);
+    // }
     // let audio_data = AudioData {
     //     sample_rate,
     //     channels,
@@ -87,9 +98,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn analyze_fft(samples: &[f32], sample_rate: u32, _channels: u16) -> FFTbands {
-    let mut bass = 0.0;
-    let mut mid = 0.0;
-    let mut treble = 0.0;
+    // let mut bass = 0.0;
+    // let mut mid = 0.0;
+    // let mut treble = 0.0;
+    let mut bands = [0.0f32; 32];
     let mut planner = FftPlanner::new();
     let size = samples.len();
     let fft = planner.plan_fft_forward(size);
@@ -98,13 +110,19 @@ fn analyze_fft(samples: &[f32], sample_rate: u32, _channels: u16) -> FFTbands {
     for (i, v) in buffer.iter().enumerate() {
         let freq = i as f32 * sample_rate as f32 / size as f32;
         let mag = v.norm();
-        if (20.0..250.0).contains(&freq) {
-            bass += mag;
-        } else if (250.0..4000.0).contains(&freq) {
-            mid += mag;
-        } else if (4000.0..20000.0).contains(&freq) {
-            treble += mag;
+        if let Some(band) = fqband(freq) {
+            bands[band] += mag;
         }
     }
-    FFTbands {bass,mid,treble,}
+    FFTbands { bands }
+}
+
+fn fqband(freq: f32) -> Option<usize> {
+    if !(20.0..20000.0).contains(&freq) {
+        return None;
+    }
+    let min = 20.0;
+    let max = 20000.0;
+    let normal = (freq / min).ln() / (max / min).ln();
+    Some((normal * 31.0) as usize)
 }
