@@ -8,11 +8,19 @@ use symphonia::default::get_probe;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::default::get_codecs;
+use rustfft::{num_complex::Complex, FftPlanner};
+
 
 pub struct AudioData {
     pub sample_rate: u32,
     pub channels: u16,
     pub samples: Vec<f32>,
+}
+
+pub struct FFTbands{
+    pub bass: f32,
+    pub mid: f32,
+    pub treble: f32,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,8 +49,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         samples.extend_from_slice(sample_buff.samples());
     }
     // println!("Samples {}", samples.len());
-    println!("Sample Rate: {}", sample_rate);
-    println!("Channels: {}", channels);
+    // println!("Sample Rate: {}", sample_rate);
+    // println!("Channels: {}", channels);
+    let window = &samples[176400..178448];
+    let bands = analyze_fft(window, sample_rate, channels);
+    println!("Bass: {}", bands.bass);
+    println!("Mid: {}", bands.mid);
+    println!("Treble: {}", bands.treble);
     // let audio_data = AudioData {
     //     sample_rate,
     //     channels,
@@ -54,4 +67,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // println!("{:?}", track.codec_params.channels);
 
     Ok(())
+}
+
+fn analyze_fft(samples: &[f32], sample_rate: u32, _channels: u16) -> FFTbands {
+    let mut bass = 0.0;
+    let mut mid = 0.0;
+    let mut treble = 0.0;
+    let mut planner = FftPlanner::new();
+    let size = samples.len();
+    let fft = planner.plan_fft_forward(size);
+    let mut buffer: Vec<Complex<f32>> = samples.iter().map(|&s| Complex{ re: s, im: 0.0 }).collect();
+    fft.process(&mut buffer);
+    for (i, v) in buffer.iter().enumerate() {
+        let freq = i as f32 * sample_rate as f32 / size as f32;
+        let mag = v.norm();
+        if (20.0..250.0).contains(&freq) {
+            bass += mag;
+        } else if (250.0..4000.0).contains(&freq) {
+            mid += mag;
+        } else if (4000.0..20000.0).contains(&freq) {
+            treble += mag;
+        }
+    }
+    FFTbands {bass,mid,treble,}
+
 }
