@@ -9,18 +9,24 @@ use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::default::get_codecs;
 use rustfft::{num_complex::Complex, FftPlanner};
+use serde::{Serialize, Deserialize};
+use std::fs;
 
-
+#[derive(Serialize, Deserialize)]
 pub struct AudioData {
     pub sample_rate: u32,
     pub channels: u16,
     pub samples: Vec<f32>,
+    pub fps: u32,
+    pub frames: Vec<Frames>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct FFTbands{
     pub bands: [f32; 32],
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Frames{
     pub time: f32,
     pub bands: [f32; 32],
@@ -28,67 +34,78 @@ pub struct Frames{
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = Path::new("assets/audmesh.mp3");
-    let file = File::open(path)?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let hint = Hint::new();
-    let probed = get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())?;
-    let mut format = probed.format;
-    let track = format.default_track().unwrap();
-    let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
-    let mut samples = Vec::new();
-    let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2) as u16;
-    loop {
-        let pc = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(_) => break,
-        };
-        let decoded = match decoder.decode(&pc) {
-            Ok(decoded) => decoded,
-            Err(_) => continue,
-        };
-        let mut sample_buff = SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
-        sample_buff.copy_interleaved_ref(decoded);
-        samples.extend_from_slice(sample_buff.samples());
-    }
-    // println!("Samples {}", samples.len());
-    // println!("Sample Rate: {}", sample_rate);
-    // println!("Channels: {}", channels);
-    let mut frames = Vec::new();
-    let size = 2048;
-    let samples_chunk = ((sample_rate as f32 * channels as f32) / 24.0) as usize;
-    let mut pos = 0;
-    while pos + size < samples.len() {
-        let bands = analyze_fft(&samples[pos..pos + size], sample_rate, channels);
-        frames.push(Frames { 
-            time: pos as f32 / (sample_rate as f32 * channels as f32),
-            bands: bands.bands,
-        });
-        pos += samples_chunk;
-    }
-    println!("Frames: {}", frames.len());
-    let mut max_bands = [0.0f32; 32];
-    for f in &frames {
-        for i in 0..32 {
-            max_bands[i] = max_bands[i].max(f.bands[i]);
+    let cache_path = "cache/song.analysis";
+
+    let _audio_data = if Path::new(cache_path).exists() {
+        load_data(cache_path)?
+    } else {
+        let path = Path::new("assets/audmesh.mp3");
+        let file = File::open(path)?;
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let hint = Hint::new();
+        let probed = get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())?;
+        let mut format = probed.format;
+        let track = format.default_track().unwrap();
+        let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
+        let mut samples = Vec::new();
+        let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
+        let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2) as u16;
+        loop {
+            let pc = match format.next_packet() {
+                Ok(packet) => packet,
+                Err(_) => break,
+            };
+            let decoded = match decoder.decode(&pc) {
+                Ok(decoded) => decoded,
+                Err(_) => continue,
+            };
+            let mut sample_buff = SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
+            sample_buff.copy_interleaved_ref(decoded);
+            samples.extend_from_slice(sample_buff.samples());
         }
-    }
-    for f in &mut frames {
-        for i in 0..32 {
-            if max_bands[i] > 0.0 {
-                f.bands[i] /= max_bands[i];
+        // println!("Samples {}", samples.len());
+        // println!("Sample Rate: {}", sample_rate);
+        // println!("Channels: {}", channels);
+        let mut frames = Vec::new();
+        let size = 2048;
+        let samples_chunk = ((sample_rate as f32 * channels as f32) / 24.0) as usize;
+        let mut pos = 0;
+        while pos + size < samples.len() {
+            let bands = analyze_fft(&samples[pos..pos + size], sample_rate, channels);
+            frames.push(Frames { 
+                time: pos as f32 / (sample_rate as f32 * channels as f32),
+                bands: bands.bands,
+            });
+            pos += samples_chunk;
+        }
+        println!("Frames: {}", frames.len());
+        let mut max_bands = [0.0f32; 32];
+        for f in &frames {
+            for i in 0..32 {
+                max_bands[i] = max_bands[i].max(f.bands[i]);
             }
         }
-    }
-    // for i in 0..10 {
-    //     println!("{}", frames[200].bands[i]);
-    // }
-    // let audio_data = AudioData {
-    //     sample_rate,
-    //     channels,
-    //     samples: samples.iter().map(|s| (*s * i16::MAX as f32) as i16).collect(),
-    // };
+        for f in &mut frames {
+            for i in 0..32 {
+                if max_bands[i] > 0.0 {
+                    f.bands[i] /= max_bands[i];
+                }
+            }
+        }
+        // for i in 0..10 {
+        //     println!("{}", frames[200].bands[i]);
+        // }
+        let audio_data = AudioData {
+            sample_rate,
+            channels,
+            samples: samples.iter().map(|s| (*s * f32::MAX as f32) as f32).collect(),
+            fps: 24,
+            frames,
+        };
+        std::fs::create_dir_all("cache")?;
+        save_data(cache_path, &audio_data)?;
+        audio_data
+    };
     // println!("{:?}", track.id);
     // println!("{:?}", track.codec_params.codec);
     // println!("{:?}", track.codec_params.sample_rate);
@@ -125,4 +142,16 @@ fn fqband(freq: f32) -> Option<usize> {
     let max = 20000.0;
     let normal = (freq / min).ln() / (max / min).ln();
     Some((normal * 31.0) as usize)
+}
+
+fn save_data(path: &str, data: &AudioData,) -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = bincode::serde::encode_to_vec(data, bincode::config::standard())?;
+    fs::write(path, bytes)?;
+    Ok(())
+}
+
+fn load_data(path: &str,) -> Result<AudioData, Box<dyn std::error::Error>> {
+    let bytes = std::fs::read(path)?;
+    let (data, _) = bincode::serde::decode_from_slice(&bytes, bincode::config::standard() )?;
+    Ok(data)
 }
