@@ -50,6 +50,10 @@ struct Attractor {
     strength: f32,
 }
 
+struct ParticleFrame {
+    positions: Vec<Vec3>,
+}
+
 impl Vec3 {
     pub fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
@@ -99,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache_path = "cache/song.analysis";
     
 
-    let _audio_data = if Path::new(cache_path).exists() {
+    let audio_data = if Path::new(cache_path).exists() {
         load_data(cache_path)?
     } else {
         let path = Path::new("assets/audmesh.mp3");
@@ -170,12 +174,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         audio_data
     };
     let mut particles = gen_particles(100);
-    let attractor = Attractor {
-        pos: Vec3::zero(),
-        strength: 1.0,
-    };
-    for _ in 0..100 {
-        sim_particle(&mut particles, &attractor);
+    let mut sim_frames = Vec::new();
+    let frame = &audio_data.frames[200];
+    let mut attractors = Vec::new();
+
+    for i in 0..32 {
+        let angle =
+            i as f32 / 32.0 * std::f32::consts::TAU;
+        attractors.push(
+            Attractor {pos: Vec3::new(angle.cos(), 0.0, angle.sin(),
+                ),
+                strength: 0.0,
+            }
+        );
+    }
+    for frame in &audio_data.frames {
+        for i in 0..32 {
+            attractors[i].strength = frame.bands[i] * 10.0;
+        }
+        sim_particle(&mut particles, &attractors);
+        sim_frames.push(ParticleFrame {
+            positions: particles.iter().map(|p| p.pos).collect(),
+        });
     }
     // println!("{:?}", track.id);
     // println!("{:?}", track.codec_params.codec);
@@ -243,13 +263,15 @@ pub fn gen_particles(count: usize) -> Vec<Particle> {
     particles
 }
 
-fn sim_particle(p: &mut Vec<Particle>, attractor: &Attractor ) {
+fn sim_particle(p: &mut Vec<Particle>, attractors: &[Attractor]) {
     for i in 0..p.len() {
-        let dir = attractor.pos.sub(p[i].pos);
-        let force =  dir.normalize().mul(0.01 * attractor.strength);
-        p[i].vel =
-            p[i].vel.add(force);
-        p[i].pos =
-            p[i].pos.add(p[i].vel);
+        let mut force = Vec3::zero();
+        for attractor in attractors {
+            let dir = attractor.pos.sub(p[i].pos);
+            force = force.add(dir.normalize().mul(0.01 * attractor.strength));
+        }
+        p[i].vel = p[i].vel.add(force);
+        p[i].vel = p[i].vel.mul(0.98);
+        p[i].pos = p[i].pos.add(p[i].vel);
     }
 }
