@@ -23,6 +23,13 @@ pub struct FFTbands{
     pub treble: f32,
 }
 
+pub struct Frames{
+    pub time: f32,
+    pub bass: f32,
+    pub mid: f32,
+    pub treble: f32,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = Path::new("assets/audmesh.mp3");
     let file = File::open(path)?;
@@ -51,11 +58,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // println!("Samples {}", samples.len());
     // println!("Sample Rate: {}", sample_rate);
     // println!("Channels: {}", channels);
-    let window = &samples[176400..178448];
-    let bands = analyze_fft(window, sample_rate, channels);
-    println!("Bass: {}", bands.bass);
-    println!("Mid: {}", bands.mid);
-    println!("Treble: {}", bands.treble);
+    let mut frames = Vec::new();
+    let size = 2048;
+    let samples_chunk = ((sample_rate as f32 * channels as f32) / 24.0) as usize;
+    let mut pos = 0;
+    while pos + size < samples.len() {
+        let bands = analyze_fft(&samples[pos..pos + size], sample_rate, channels);
+        frames.push(Frames { 
+            time: pos as f32 / (sample_rate as f32 * channels as f32),
+            bass: bands.bass,
+            mid: bands.mid,
+            treble: bands.treble,
+        });
+        pos += samples_chunk;
+    }
+    println!("Frames: {}", frames.len());
     // let audio_data = AudioData {
     //     sample_rate,
     //     channels,
@@ -90,5 +107,4 @@ fn analyze_fft(samples: &[f32], sample_rate: u32, _channels: u16) -> FFTbands {
         }
     }
     FFTbands {bass,mid,treble,}
-
 }
