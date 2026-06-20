@@ -181,9 +181,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..32 {
         let angle =
             i as f32 / 32.0 * std::f32::consts::TAU;
+        let phi = i as f32 / 32.0 * std::f32::consts::PI;
         attractors.push(
-            Attractor {pos: Vec3::new(angle.cos(), 0.0, angle.sin(),
-                ),
+            Attractor {pos: Vec3::new(angle.cos()* phi.sin(), phi.cos(), angle.sin()* phi.cos()),
                 strength: 0.0,
             }
         );
@@ -196,7 +196,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sim_frames.push(ParticleFrame {
             positions: particles.iter().map(|p| p.pos).collect(),
         });
+        if sim_frames.len() % 500 == 0 {
+            let (min, max) = particle_bounds(&particles);
+        }
     }
+    export_obj(&particles, "cloud.obj")?;
     // println!("{:?}", track.id);
     // println!("{:?}", track.codec_params.codec);
     // println!("{:?}", track.codec_params.sample_rate);
@@ -274,4 +278,28 @@ fn sim_particle(p: &mut Vec<Particle>, attractors: &[Attractor]) {
         p[i].vel = p[i].vel.mul(0.98);
         p[i].pos = p[i].pos.add(p[i].vel);
     }
+}
+
+fn particle_bounds(particles: &[Particle]) -> (Vec3, Vec3) {
+    let mut min = Vec3::new(f32::MAX, f32::MAX, f32::MAX);
+    let mut max = Vec3::new(f32::MIN, f32::MIN, f32::MIN);
+    for p in particles {
+        min.x = min.x.min(p.pos.x);
+        min.y = min.y.min(p.pos.y);
+        min.z = min.z.min(p.pos.z);
+        max.x = max.x.max(p.pos.x);
+        max.y = max.y.max(p.pos.y);
+        max.z = max.z.max(p.pos.z);
+    }
+    (min, max)
+}
+
+use std::io::Write;
+
+fn export_obj(particles: &[Particle], path: &str,) -> std::io::Result<()> {
+    let mut file = File::create(path)?;
+    for p in particles {
+        writeln!(file,"v {} {} {}", p.pos.x, p.pos.y, p.pos.z)?;
+    }
+    Ok(())
 }

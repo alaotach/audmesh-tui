@@ -9,3 +9,6 @@ rustfft = "6"
 serde = { version = "1", features = ["derive"] }
 bincode = { version = "2", features = ["serde"] }
 rand = "0.9"
+ratatui = "0.30.2"
+crossterm = "0.29.0"
+ratatui-ratty = "0.3.1"
