@@ -104,32 +104,6 @@ pub struct MeshData {
     pub faces: Vec<[u32; 3]>,
 }
 
-struct VoxelGrid {
-    size: usize,
-    density: Vec<f32>,
-}
-
-impl VoxelGrid {
-    fn new(size: usize) -> Self {
-        Self {
-            size,
-            density: vec![0.0; size * size * size],
-        }
-    }
-    fn index(&self, x: usize, y: usize, z: usize) -> usize {
-        x + y * self.size + z * self.size * self.size
-    }
-    fn add(&mut self, x: isize, y: isize, z: isize, value: f32) {
-        if x < 0 || y < 0 || z < 0 || x >= self.size as isize || y >= self.size as isize || z >= self.size as isize {
-            return;
-        }
-        let idx = self.index(x as usize, y as usize, z as usize);
-        self.density[idx] += value;
-    }
-    fn get(&self, x: usize, y: usize, z: usize) -> f32 {
-        self.density[self.index(x, y, z)]
-    }
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache_path = "cache/song.analysis";
@@ -209,7 +183,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sim_frames = Vec::new();
     let frame = &audio_data.frames[200];
     let mut attractors = Vec::new();
-    let mut grid = VoxelGrid::new(64);
 
     for i in 0..32 {
         let angle =
@@ -233,27 +206,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (min, max) = particle_bounds(&particles);
         }
     }
-    for p in &particles {
-        let x = make_grid(p.pos.x, grid.size);
-        let y = make_grid(p.pos.y, grid.size);
-        let z = make_grid(p.pos.z, grid.size);
-        let r = 3;
-        let sigma2 = 4.0f32;
-        for dx in -r..=r {
-            for dy in -r..=r {
-                for dz in -r..=r {
-                    let d2 = (dx * dx + dy * dy + dz * dz) as f32;
-                    if d2 > (r * r) as f32 {
-                        continue;
-                    }
-                    let value = (-d2 / sigma2).exp();
-                    grid.add(x as isize + dx, y as isize + dy, z as isize + dz, value);
-                }
-            }
-        }
-    }
 
-    cube_march(&grid);
 
     // println!("{:?}", track.id);
     // println!("{:?}", track.codec_params.codec);
@@ -356,43 +309,4 @@ fn generate_mesh(particles: &[Particle]) -> MeshData {
         faces: Vec::new(),
     }
 }
-
-fn make_grid(v: f32, size: usize) -> usize {
-    const WORLD_SIZE: f32 = 10.0;
-    let t = (v + WORLD_SIZE) / (2.0 * WORLD_SIZE);
-    (t * (size as f32 - 1.0)).clamp(0.0, (size - 1) as f32) as usize
-}
-
-fn cube_march(grid: &VoxelGrid) {
-    const ISO: f32 = 20.0;
-    let mut active = 0;
-    for z in 0..grid.size - 1 {
-        for y in 0..grid.size - 1 {
-            for x in 0..grid.size - 1 {
-                let cube = [
-                    grid.get(x,     y,     z),
-                    grid.get(x + 1, y,     z),
-                    grid.get(x + 1, y + 1, z),
-                    grid.get(x,     y + 1, z),
-
-                    grid.get(x,     y,     z + 1),
-                    grid.get(x + 1, y,     z + 1),
-                    grid.get(x + 1, y + 1, z + 1),
-                    grid.get(x,     y + 1, z + 1),
-                ];
-
-                let mut ci = 0u8;
-                for i in 0..8 {
-                    if cube[i] > ISO {
-                        ci |= 1 << i;
-                    }
-                }
-                if ci != 0 && ci != 255 {
-                    active += 1;
-                }
-            }
-        }
-    }
-
-    println!("active: {}", active);
-}
+
