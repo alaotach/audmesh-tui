@@ -11,7 +11,10 @@ use symphonia::default::get_codecs;
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Serialize, Deserialize};
 use std::fs;
-use rand::Rng;
+use hexasphere::shapes::IcoSphere;
+use byteorder::{BigEndian, WriteBytesExt};
+use fastnoise_lite::{FastNoiseLite, NoiseType};
+use std::io::Write;
 
 #[derive(Serialize, Deserialize)]
 pub struct AudioData {
@@ -34,24 +37,15 @@ pub struct Frames{
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Vec3 {
-    x: f32,
-    y: f32,
-    z: f32,
-}
-
-struct Particle {
-    pos: Vec3,
-    vel: Vec3,
+pub struct Vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }
 
 struct Attractor {
     pos: Vec3,
     strength: f32,
-}
-
-struct ParticleFrame {
-    positions: Vec<Vec3>,
 }
 
 impl Vec3 {
@@ -104,6 +98,19 @@ pub struct MeshData {
     pub faces: Vec<[u32; 3]>,
 }
 
+struct Noise {
+    nx: FastNoiseLite,
+}
+
+impl Noise {
+    fn new() -> Self {
+        let mut nx = FastNoiseLite::new();
+        nx.set_noise_type(Some(NoiseType::Perlin));
+        nx.set_frequency(Some(0.3));
+        nx.set_seed(Some(42));
+        Self { nx }
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache_path = "cache/song.analysis";
@@ -112,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audio_data = if Path::new(cache_path).exists() {
         load_data(cache_path)?
     } else {
-        let path = Path::new("assets/audmesh.mp3");
+        let path = Path::new("assets/audmesh_trim.mp3");
         let file = File::open(path)?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
         let hint = Hint::new();
@@ -179,40 +186,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         save_data(cache_path, &audio_data)?;
         audio_data
     };
-    let mut particles = gen_particles(30000);
-    let mut sim_frames = Vec::new();
-    let frame = &audio_data.frames[200];
     let mut attractors = Vec::new();
 
-    for i in 0..32 {
-        let angle =
-            i as f32 / 32.0 * std::f32::consts::TAU;
-        let phi = i as f32 / 32.0 * std::f32::consts::PI;
-        attractors.push(
-            Attractor {pos: Vec3::new(angle.cos()* phi.sin(), phi.cos(), angle.sin()* phi.cos()),
-                strength: 0.0,
-            }
-        );
+    let ga = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
+    let n = 32usize;
+    for i in 0..n {
+        let y = 1.0 - (i as f32 / (n as f32 - 1.0)) * 2.0;
+        let r = (1.0 - y * y).max(0.0).sqrt();
+        let theta = ga * i as f32;
+        attractors.push(Attractor {pos: Vec3::new(theta.cos() * r, y, theta.sin() * r), strength: 0.0 });
     }
-    for frame in &audio_data.frames {
+    let sphere = IcoSphere::new(60, |point| {Vec3::new(point.x, point.y, point.z)});   
+    let mut b_ver = Vec::new();
+    let mut n = Vec::new();
+    for p in sphere.raw_points() {
+        let v = Vec3::new(p.x, p.y, p.z);
+        b_ver.push(v);
+        n.push(v.normalize());
+    }
+    let i = sphere.get_all_indices();
+    let mut faces = Vec::new();
+    for j in i.chunks_exact(3) {
+        faces.push([j[0], j[1], j[2]]);
+    }
+    let mesh_data = MeshData {
+        vertices: b_ver.clone(),
+        faces: faces,
+    };
+    export_obj(&mesh_data, "base_mesh.obj").unwrap();
+    println!("base_mesh.obj generated!");
+
+    
+    let mut anim_fs = Vec::new();
+    let mut prev_ver = b_ver.clone();
+    let curl = Noise::new();
+    let mut strength = [0.0f32; 32];
+
+    for (f, k) in audio_data.frames.iter().enumerate() {
         for i in 0..32 {
-            attractors[i].strength = frame.bands[i] * 10.0;
+            let raw = k.bands[i];
+            let a = if raw > strength[i] { 0.4 } else { 0.1 };
+            strength[i] = strength[i] * (1.0 - a) + raw * a;
+            attractors[i].strength = strength[i];
         }
-        sim_particle(&mut particles, &attractors);
-        sim_frames.push(ParticleFrame {
-            positions: particles.iter().map(|p| p.pos).collect(),
-        });
-        if sim_frames.len() % 500 == 0 {
-            let (min, max) = particle_bounds(&particles);
+
+        let mut curr_ver = vec![Vec3::zero(); b_ver.len()];
+        curr_ver.copy_from_slice(&b_ver);
+        deform(&mut curr_ver, &b_ver, &n, &attractors, &curl, f * 0.042);
+        for i in 0..curr_ver.len() {
+            curr_ver[i] = prev_ver[i].mul(0.7).add(curr_ver[i].mul(0.3));
         }
+        prev_ver = curr_ver.clone();
+        anim_fs.push(curr_ver);
     }
 
-
-    // println!("{:?}", track.id);
-    // println!("{:?}", track.codec_params.codec);
-    // println!("{:?}", track.codec_params.sample_rate);
-    // println!("{:?}", track.codec_params.channels);
-
+    export_mdd(&anim_fs, audio_data.fps as f32, "animation.mdd").unwrap();
+    println!("animation.mdd done!");
     Ok(())
 }
 
@@ -258,55 +287,51 @@ fn load_data(path: &str,) -> Result<AudioData, Box<dyn std::error::Error>> {
     Ok(data)
 }
 
-pub fn gen_particles(count: usize) -> Vec<Particle> {
-    let mut rng = rand::rng();
-    let mut particles = Vec::new();
-    for _ in 0..count {
-        particles.push(Particle {
-            pos: Vec3 {
-                x: rng.random_range(-1.0..1.0),
-                y: rng.random_range(-1.0..1.0),
-                z: rng.random_range(-1.0..1.0),
-            },
-            vel: Vec3::zero(),
-        });
-    }
-    particles
-}
-
-fn sim_particle(p: &mut Vec<Particle>, attractors: &[Attractor]) {
-    for i in 0..p.len() {
-        let mut force = Vec3::zero();
+fn deform(vertices: &mut [Vec3], b_ver: &[Vec3], n: &[Vec3], attractors: &[Attractor], noise: &Noise, t: f32) {
+    let sigma_sq = 0.18f32 * 0.18;
+    let h = 0.28f32;
+    let amt = 0.18f32;
+    for (i, vertex) in vertices.iter_mut().enumerate() {
+        let base  = b_ver[i];
+        let normal = n[i];
+        let mut ds = 0.0f32;
         for attractor in attractors {
-            let dir = attractor.pos.sub(p[i].pos);
-            force = force.add(dir.normalize().mul(0.01 * attractor.strength));
+            if attractor.strength < 0.005 { continue; }
+            let dot = (base.x * attractor.pos.x + base.y * attractor.pos.y + base.z * attractor.pos.z).clamp(-1.0, 1.0);
+            let d = 1.0 - dot;
+            ds += (-d / (2.0 * sigma_sq)).exp() * attractor.strength * h;
         }
-        p[i].vel = p[i].vel.add(force);
-        p[i].vel = p[i].vel.mul(0.98);
-        p[i].pos = p[i].pos.add(p[i].vel);
+        let nx = noise.nx.get_noise_3d(base.x * 3.0, base.y * 3.0, t);
+        ds *= 1.0 + nx * amt;
+        let ds = ds.clamp(0.0, 0.35);
+        *vertex = base.add(normal.mul(ds));
     }
 }
 
-fn particle_bounds(particles: &[Particle]) -> (Vec3, Vec3) {
-    let mut min = Vec3::new(f32::MAX, f32::MAX, f32::MAX);
-    let mut max = Vec3::new(f32::MIN, f32::MIN, f32::MIN);
-    for p in particles {
-        min.x = min.x.min(p.pos.x);
-        min.y = min.y.min(p.pos.y);
-        min.z = min.z.min(p.pos.z);
-        max.x = max.x.max(p.pos.x);
-        max.y = max.y.max(p.pos.y);
-        max.z = max.z.max(p.pos.z);
+fn export_obj(mesh: &MeshData, path: &str) -> Result<(), std::io::Error> {
+    let mut f = File::create(path)?;
+    for i in &mesh.vertices {
+        writeln!(f, "v {} {} {}", i.x, i.y, i.z)?;
     }
-    (min, max)
+    for i in &mesh.faces {
+        writeln!(f, "f {} {} {}", i[0] + 1, i[1] + 1, i[2] + 1)?;
+    }
+    Ok(())
 }
 
-use std::io::Write;
-
-fn generate_mesh(particles: &[Particle]) -> MeshData {
-    MeshData {
-        vertices: particles.iter().map(|p| p.pos).collect(),
-        faces: Vec::new(),
+fn export_mdd(frames: &[Vec<Vec3>], fps: f32, path: &str) -> std::io::Result<()> {
+    let mut f = File::create(path)?;
+    f.write_u32::<BigEndian>(frames.len() as u32)?;
+    f.write_u32::<BigEndian>(frames[0].len() as u32)?;
+    for i in 0..frames.len() {
+        f.write_f32::<BigEndian>(i as f32 / fps)?;
     }
+    for i in frames {
+        for j in i {
+            f.write_f32::<BigEndian>(j.x)?;
+            f.write_f32::<BigEndian>(j.y)?;
+            f.write_f32::<BigEndian>(j.z)?;
+        }
+    }
+    Ok(())
 }
-
